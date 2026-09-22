@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, CallbackQuery
 
 from config import (
     BOT_TOKEN,
@@ -21,8 +21,7 @@ from config import (
 )
 from database import init_db, save_user, get_user, delete_user, search_teammates
 from keyboards import main_menu, back_to_menu, teammate_actions
-from tracker_api import parse_tracker_url
-from screenshot import take_stats_screenshot
+from tracker_api import parse_tracker_url, get_player_stats
 from webhook import create_app
 
 
@@ -48,6 +47,48 @@ bot = Bot(
 dp = Dispatcher()
 
 
+# ===== Утилита для форматирования статистики =====
+def format_stats_text(stats: dict) -> str:
+    """Формирует красивое сообщение со статистикой игрока"""
+    matches = stats.get("last_matches", [])
+    
+    if not matches:
+        matches_text = "нет данных"
+    else:
+        lines = []
+        for m in matches:
+            result = "✅" if m.get("result") == "W" else "❌"
+            k = m.get("kills", 0)
+            d = m.get("deaths", 0)
+            a = m.get("assists", 0)
+            agent = m.get("agent", "?")
+            lines.append(f"{result} <code>{k}/{d}/{a}</code> — {agent}")
+        matches_text = "\n".join(lines)
+    
+    # Считаем общий winrate по последним 5 играм
+    wins = sum(1 for m in matches if m.get("result") == "W")
+    total = len(matches)
+    winrate = round(wins / total * 100, 1) if total > 0 else 0
+    
+    # Считаем средний KDA
+    if total > 0:
+        avg_kills = round(sum(m.get("kills", 0) for m in matches) / total, 1)
+        avg_deaths = round(sum(m.get("deaths", 0) for m in matches) / total, 1)
+        avg_assists = round(sum(m.get("assists", 0) for m in matches) / total, 1)
+        kda_text = f"{avg_kills} / {avg_deaths} / {avg_assists}"
+    else:
+        kda_text = "нет данных"
+    
+    text = (
+        f"👤 <b>{stats.get('name', 'Unknown')}</b>\n\n"
+        f"📊 <b>Средний KDA:</b> {kda_text}\n"
+        f"🏆 <b>Winrate (5 игр):</b> {winrate}%\n\n"
+        f"🎮 <b>Последние 5 игр:</b>\n{matches_text}"
+    )
+    
+    return text
+
+
 # ===== Команды =====
 
 @dp.message(CommandStart())
@@ -64,9 +105,9 @@ async def cmd_start(message: Message):
         text = (
             f"👋 Привет, {message.from_user.full_name}!\n\n"
             "🎮 Это бот для поиска тиммейтов в <b>Valorant</b>.\n\n"
-            "⚠️ <b>Для использования нужно привязать профиль Tracker.gg.</b>\n"
+            "⚠️ <b>Для использования нужно привязать Riot ID.</b>\n"
             "Так мы гарантируем, что все игроки — реальные.\n\n"
-            "Нажми <b>«Привязать Tracker»</b>, чтобы начать."
+            "Нажми <b>«Привязать аккаунт»</b>, чтобы начать."
         )
 
     await message.answer(text, reply_markup=main_menu())
@@ -78,12 +119,12 @@ async def cmd_help(message: Message):
         "📖 <b>Команды:</b>\n\n"
         "/start — главное меню\n"
         "/help — эта справка\n\n"
-        "🔗 <b>Как привязать Tracker.gg:</b>\n"
-        "1. Открой tracker.gg/valorant\n"
-        "2. Найди свой профиль\n"
-        "3. Скопируй ссылку из адресной строки\n"
-        "4. Отправь её боту\n\n"
-        "⚠️ Профиль должен быть <b>публичным</b>."
+        "🔗 <b>Как привязать аккаунт:</b>\n"
+        "Отправь боту свой Riot ID в формате:\n"
+        "<code>Ник#ТЕГ</code>\n\n"
+        "Пример:\n"
+        "<code>Player#EUW</code>\n\n"
+        "⚠️ Ник должен быть точным, включая регистр."
     )
     await message.answer(text)
 
@@ -105,8 +146,8 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
         text = (
             f"👋 Привет, {callback.from_user.full_name}!\n\n"
             "🎮 Это бот для поиска тиммейтов в <b>Valorant</b>.\n\n"
-            "⚠️ <b>Для использования нужно привязать профиль Tracker.gg.</b>\n\n"
-            "Нажми <b>«Привязать Tracker»</b>, чтобы начать."
+            "⚠️ <b>Для использования нужно привязать Riot ID.</b>\n\n"
+            "Нажми <b>«Привязать аккаунт»</b>, чтобы начать."
         )
 
     await callback.message.edit_text(text, reply_markup=main_menu())
@@ -120,15 +161,14 @@ async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
     await state.set_state(LinkStates.waiting_for_url)
 
     text = (
-        "🔗 <b>Привязка Tracker.gg</b>\n\n"
-        "Отправь мне ссылку на свой профиль.\n\n"
-        "<b>Как получить:</b>\n"
-        "1. Открой tracker.gg/valorant\n"
-        "2. Найди свой профиль\n"
-        "3. Скопируй URL из адресной строки\n\n"
-        "Пример:\n"
-        "<code>https://tracker.gg/valorant/profile/riot/Player%23TAG/overview</code>\n\n"
-        "⚠️ Профиль должен быть <b>публичным</b>."
+        "🔗 <b>Привязка Riot ID</b>\n\n"
+        "Отправь мне свой Riot ID в формате:\n"
+        "<code>Ник#ТЕГ</code>\n\n"
+        "<b>Примеры:</b>\n"
+        "<code>Player#EUW</code>\n"
+        "<code>из грязи в князи#GAVNO</code>\n\n"
+        "⚠️ Ник должен быть точным, включая регистр и пробелы.\n"
+        "Если не знаешь свой тег — посмотри в клиенте Valorant."
     )
 
     await callback.message.edit_text(text, reply_markup=back_to_menu())
@@ -136,54 +176,48 @@ async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
 
 
 @dp.message(LinkStates.waiting_for_url)
-async def process_tracker_url(message: Message, state: FSMContext):
-    url = message.text.strip()
+async def process_riot_id(message: Message, state: FSMContext):
+    riot_id = message.text.strip()
 
-    riot_id = await parse_tracker_url(url)
-
-    if not riot_id:
+    # Проверяем формат
+    if "#" not in riot_id:
         await message.answer(
-            "❌ <b>Не удалось распознать ссылку.</b>\n\n"
-            "Убедись, что она ведёт на профиль Tracker.gg:\n"
-            "<code>https://tracker.gg/valorant/profile/riot/Ник%23ТЕГ/overview</code>",
+            "❌ <b>Неверный формат.</b>\n\n"
+            "Riot ID должен содержать <code>#</code>:\n"
+            "<code>Ник#ТЕГ</code>\n\n"
+            "Пример: <code>Player#EUW</code>",
             reply_markup=back_to_menu()
         )
         return
 
-    # Сохраняем сразу (чтобы не потерять, если скриншот упадёт)
-    await save_user(message.from_user.id, riot_id, url)
-
     processing_msg = await message.answer(
-        "⏳ Загружаю статистику с Tracker.gg...\n"
-        "Это может занять 15-30 секунд."
+        "⏳ Загружаю статистику с Riot API...\n"
+        "Это может занять 10-20 секунд."
     )
 
-    screenshot_io = await take_stats_screenshot(url)
+    # Получаем статистику
+    stats = await get_player_stats(riot_id)
 
-    if screenshot_io:
-        photo = BufferedInputFile(
-            screenshot_io.read(),
-            filename="valorant_stats.png"
-        )
+    if stats:
+        # Сохраняем в БД
+        await save_user(message.from_user.id, riot_id, f"riot:{riot_id}")
+
+        # Форматируем и отправляем
+        text = format_stats_text(stats)
+        text = f"✅ <b>Аккаунт привязан!</b>\n\n{text}"
 
         await processing_msg.delete()
-        await message.answer_photo(
-            photo,
-            caption=(
-                f"✅ <b>Аккаунт привязан!</b>\n"
-                f"👤 Ник: <code>{riot_id}</code>"
-            ),
-            reply_markup=main_menu()
-        )
+        await message.answer(text, reply_markup=main_menu())
     else:
         await processing_msg.edit_text(
-            "⚠️ <b>Аккаунт сохранён, но скриншот не удалось загрузить.</b>\n\n"
+            "❌ <b>Не удалось получить статистику.</b>\n\n"
             "Возможные причины:\n"
-            "• Профиль не публичный\n"
-            "• Cloudflare блокирует запрос\n"
-            "• Tracker.gg временно недоступен\n\n"
-            "Попробуй позже через «Мой профиль».",
-            reply_markup=main_menu()
+            "• Неверный Riot ID (проверь регистр)\n"
+            "• Аккаунт не существует в этом регионе\n"
+            "• API ключ истёк (обновляется каждые 24ч)\n"
+            "• Riot API временно недоступен\n\n"
+            "Попробуй позже или проверь данные.",
+            reply_markup=back_to_menu()
         )
 
     await state.clear()
@@ -198,7 +232,7 @@ async def cb_my_profile(callback: CallbackQuery):
     if not user:
         await callback.message.edit_text(
             "❌ Ты ещё не привязал аккаунт.\n\n"
-            "Нажми <b>«Привязать Tracker»</b>.",
+            "Нажми <b>«Привязать аккаунт»</b>.",
             reply_markup=back_to_menu()
         )
         await callback.answer()
@@ -207,28 +241,16 @@ async def cb_my_profile(callback: CallbackQuery):
     await callback.message.edit_text("⏳ Загружаю статистику...")
     await callback.answer()
 
-    screenshot_io = await take_stats_screenshot(user["tracker_url"])
+    stats = await get_player_stats(user["riot_id"])
 
-    if screenshot_io:
-        photo = BufferedInputFile(
-            screenshot_io.read(),
-            filename="my_stats.png"
-        )
-
+    if stats:
+        text = f"👤 <b>Твой профиль</b>\n\n{format_stats_text(stats)}"
         await callback.message.delete()
-        await callback.message.answer_photo(
-            photo,
-            caption=(
-                f"👤 <b>Твой профиль</b>\n"
-                f"🎯 <code>{user['riot_id']}</code>\n\n"
-                f"🔗 <a href='{user['tracker_url']}'>Tracker.gg</a>"
-            ),
-            reply_markup=back_to_menu()
-        )
+        await callback.message.answer(text, reply_markup=back_to_menu())
     else:
         await callback.message.edit_text(
             "⚠️ Не удалось загрузить статистику.\n"
-            "Попробуй позже.",
+            "Попробуй позже (возможно, API ключ истёк).",
             reply_markup=back_to_menu()
         )
 
@@ -263,30 +285,20 @@ async def cb_find_teammate(callback: CallbackQuery):
     await callback.message.edit_text("⏳ Загружаю профиль тиммейта...")
     await callback.answer()
 
-    screenshot_io = await take_stats_screenshot(candidate["tracker_url"])
+    stats = await get_player_stats(candidate["riot_id"])
 
-    if screenshot_io:
-        photo = BufferedInputFile(
-            screenshot_io.read(),
-            filename="teammate_stats.png"
-        )
-
+    if stats:
+        text = f"👤 <b>Найден тиммейт!</b>\n\n{format_stats_text(stats)}"
         await callback.message.delete()
-        await callback.message.answer_photo(
-            photo,
-            caption=(
-                f"👤 <b>Найден тиммейт!</b>\n"
-                f"🎯 <code>{candidate['riot_id']}</code>\n\n"
-                f"🔗 <a href='{candidate['tracker_url']}'>Tracker.gg</a>"
-            ),
+        await callback.message.answer(
+            text,
             reply_markup=teammate_actions(candidate["telegram_id"])
         )
     else:
         await callback.message.edit_text(
             f"👤 <b>Найден игрок</b>\n\n"
-            f"🎯 <code>{candidate['riot_id']}</code>\n"
-            f"🔗 <a href='{candidate['tracker_url']}'>Tracker.gg</a>\n\n"
-            "⚠️ Не удалось загрузить скриншот.",
+            f"🎯 <code>{candidate['riot_id']}</code>\n\n"
+            "⚠️ Не удалось загрузить статистику.",
             reply_markup=teammate_actions(candidate["telegram_id"])
         )
 
@@ -328,13 +340,10 @@ async def on_shutdown():
 
 
 async def main():
-    # Webhook ставим до старта сервера
     await on_startup()
 
-    # Создаём aiohttp-приложение
     app = create_app(bot, dp)
 
-    # Запускаем сервер
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEBAPP_HOST, WEBAPP_PORT)
@@ -342,7 +351,6 @@ async def main():
 
     logger.info(f"🚀 Сервер запущен на {WEBAPP_HOST}:{WEBAPP_PORT}")
 
-    # Бесконечное ожидание
     try:
         await asyncio.Event().wait()
     finally:
@@ -351,7 +359,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    # На Windows для Playwright нужен SelectorEventLoop
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
