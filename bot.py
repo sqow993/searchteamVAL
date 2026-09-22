@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import os
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -18,10 +19,11 @@ from config import (
     WEBHOOK_SECRET,
     WEBAPP_HOST,
     WEBAPP_PORT,
+    DB_PATH,
 )
 from database import init_db, save_user, get_user, delete_user, search_teammates
 from keyboards import main_menu, back_to_menu, teammate_actions
-from tracker_api import parse_tracker_url, get_player_stats
+from tracker_api import get_player_stats
 from webhook import create_app
 
 
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # ===== Состояния FSM =====
 class LinkStates(StatesGroup):
-    waiting_for_url = State()
+    waiting_for_riot_id = State()
 
 
 # ===== Bot и Dispatcher =====
@@ -47,13 +49,15 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# ===== Утилита для форматирования статистики =====
+# ===== Форматирование статистики =====
 def format_stats_text(stats: dict) -> str:
     """Формирует красивое сообщение со статистикой игрока"""
     matches = stats.get("last_matches", [])
-    
+
     if not matches:
         matches_text = "нет данных"
+        winrate = 0
+        kda_text = "нет данных"
     else:
         lines = []
         for m in matches:
@@ -64,28 +68,23 @@ def format_stats_text(stats: dict) -> str:
             agent = m.get("agent", "?")
             lines.append(f"{result} <code>{k}/{d}/{a}</code> — {agent}")
         matches_text = "\n".join(lines)
-    
-    # Считаем общий winrate по последним 5 играм
-    wins = sum(1 for m in matches if m.get("result") == "W")
-    total = len(matches)
-    winrate = round(wins / total * 100, 1) if total > 0 else 0
-    
-    # Считаем средний KDA
-    if total > 0:
+
+        wins = sum(1 for m in matches if m.get("result") == "W")
+        total = len(matches)
+        winrate = round(wins / total * 100, 1) if total > 0 else 0
+
         avg_kills = round(sum(m.get("kills", 0) for m in matches) / total, 1)
         avg_deaths = round(sum(m.get("deaths", 0) for m in matches) / total, 1)
         avg_assists = round(sum(m.get("assists", 0) for m in matches) / total, 1)
         kda_text = f"{avg_kills} / {avg_deaths} / {avg_assists}"
-    else:
-        kda_text = "нет данных"
-    
+
     text = (
         f"👤 <b>{stats.get('name', 'Unknown')}</b>\n\n"
         f"📊 <b>Средний KDA:</b> {kda_text}\n"
         f"🏆 <b>Winrate (5 игр):</b> {winrate}%\n\n"
         f"🎮 <b>Последние 5 игр:</b>\n{matches_text}"
     )
-    
+
     return text
 
 
@@ -158,7 +157,7 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "link_tracker")
 async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(LinkStates.waiting_for_url)
+    await state.set_state(LinkStates.waiting_for_riot_id)
 
     text = (
         "🔗 <b>Привязка Riot ID</b>\n\n"
@@ -175,11 +174,10 @@ async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.message(LinkStates.waiting_for_url)
+@dp.message(LinkStates.waiting_for_riot_id)
 async def process_riot_id(message: Message, state: FSMContext):
     riot_id = message.text.strip()
 
-    # Проверяем формат
     if "#" not in riot_id:
         await message.answer(
             "❌ <b>Неверный формат.</b>\n\n"
@@ -195,16 +193,12 @@ async def process_riot_id(message: Message, state: FSMContext):
         "Это может занять 10-20 секунд."
     )
 
-    # Получаем статистику
     stats = await get_player_stats(riot_id)
 
     if stats:
-        # Сохраняем в БД
         await save_user(message.from_user.id, riot_id, f"riot:{riot_id}")
 
-        # Форматируем и отправляем
-        text = format_stats_text(stats)
-        text = f"✅ <b>Аккаунт привязан!</b>\n\n{text}"
+        text = f"✅ <b>Аккаунт привязан!</b>\n\n{format_stats_text(stats)}"
 
         await processing_msg.delete()
         await message.answer(text, reply_markup=main_menu())
@@ -320,8 +314,12 @@ async def cb_unlink(callback: CallbackQuery):
 # ===== Запуск =====
 
 async def on_startup():
-    """Устанавливает webhook при старте"""
+    """Инициализация БД и установка webhook"""
     await init_db()
+
+    # Проверка БД
+    logger.info(f"[STARTUP] DB_PATH = {os.path.abspath(DB_PATH)}")
+    logger.info(f"[STARTUP] Файл существует: {os.path.exists(DB_PATH)}")
 
     webhook_full_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
     await bot.set_webhook(
@@ -333,7 +331,6 @@ async def on_startup():
 
 
 async def on_shutdown():
-    """Удаляет webhook при остановке"""
     await bot.delete_webhook()
     await bot.session.close()
     logger.info("Бот остановлен")
