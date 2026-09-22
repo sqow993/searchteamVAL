@@ -36,6 +36,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ===== Утилита: генерация ссылки на Tracker.gg =====
+def make_tracker_url(riot_id: str) -> str:
+    """
+    Генерирует ссылку на профиль Tracker.gg из Riot ID.
+    
+    Пример:
+    "из грязи в князи#GAVNO" 
+    -> "https://tracker.gg/valorant/profile/riot/%D0%B8%D0%B7%20...%23GAVNO/overview"
+    """
+    encoded = urllib.parse.quote(riot_id, safe="")
+    return f"https://tracker.gg/valorant/profile/riot/{encoded}/overview"
+
+
 # ===== Состояния FSM =====
 class LinkStates(StatesGroup):
     waiting_for_riot_id = State()
@@ -56,17 +69,19 @@ dp = Dispatcher()
 
 # ===== Форматирование карточки игрока =====
 def format_profile_card(user: dict, title: str = "👤 Найден тиммейт!") -> str:
-    """Карточка игрока: Riot ID, ранг, «Обо мне»"""
+    """Карточка: Riot ID, ранг, ссылка на Tracker, «Обо мне»"""
     rank = user.get("rank", "Unranked")
     rank_range = _rank_range(rank, tolerance=2)
     range_text = f"{rank_range[0]} — {rank_range[-1]}" if rank_range else rank
 
     bio = (user.get("bio") or "").strip()
+    tracker_url = user.get("tracker_url") or make_tracker_url(user["riot_id"])
 
     lines = [f"<b>{title}</b>\n"]
     lines.append(f"🎯 Riot ID: <code>{user['riot_id']}</code>")
     lines.append(f"🏆 Ранг: <b>{rank}</b>")
     lines.append(f"🔍 Ищет в диапазоне: {range_text}")
+    lines.append(f"🔗 <a href='{tracker_url}'>Профиль на Tracker.gg</a>")
 
     if bio:
         lines.append(f"\n📝 <b>Обо мне:</b>\n<i>{bio}</i>")
@@ -112,7 +127,7 @@ async def cmd_help(message: Message):
         "1. Отправь Riot ID в формате <code>Ник#ТЕГ</code>\n"
         "2. Выбери ранг\n"
         "3. Заполни «Обо мне» (по желанию)\n\n"
-        "🎮 <b>Поиск:</b> бот ищет игроков в пределах ±2 дивизиона от твоего ранга."
+        "🎮 <b>Поиск:</b> бот ищет игроков ±2 дивизиона от твоего ранга."
     )
     await message.answer(text)
 
@@ -161,7 +176,8 @@ async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
         "<code>Ник#ТЕГ</code>\n\n"
         "<b>Примеры:</b>\n"
         "<code>Player#EUW</code>\n"
-        "<code>из грязи в князи#GAVNO</code>"
+        "<code>из грязи в князи#GAVNO</code>\n\n"
+        "💡 Бот сам создаст ссылку на твой профиль Tracker.gg."
     )
 
     await callback.message.edit_text(text, reply_markup=back_to_menu())
@@ -219,9 +235,8 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    encoded = urllib.parse.quote(riot_id, safe="")
-    tracker_url = f"https://tracker.gg/valorant/profile/riot/{encoded}/overview"
-
+    # Генерируем ссылку на Tracker.gg и сохраняем
+    tracker_url = make_tracker_url(riot_id)
     await save_user(callback.from_user.id, riot_id, tracker_url, rank)
 
     rank_range = _rank_range(rank, tolerance=2)
@@ -231,15 +246,37 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
         f"✅ <b>Аккаунт привязан!</b>\n\n"
         f"🎯 Riot ID: <code>{riot_id}</code>\n"
         f"🏆 Ранг: <b>{rank}</b>\n"
-        f"🔍 Диапазон поиска: <b>{range_text}</b>\n\n"
+        f"🔍 Диапазон поиска: <b>{range_text}</b>\n"
+        f"🔗 <a href='{tracker_url}'>Твой профиль на Tracker.gg</a>\n\n"
         f"Хочешь рассказать о себе?\n"
         f"Например: <i>«Меня зовут Егор, играю с 2024 года, "
         f"активно начал в этом году, хочу найти тиммейта чтобы закеррил катку»</i>"
     )
 
     await state.clear()
-    await callback.message.edit_text(text, reply_markup=after_link_keyboard())
+    await callback.message.edit_text(
+        text,
+        reply_markup=after_link_keyboard(),
+        disable_web_page_preview=True
+    )
     await callback.answer("Ранг сохранён!")
+
+
+# ===== Открыть Tracker.gg =====
+
+@dp.callback_query(F.data == "open_tracker")
+async def cb_open_tracker(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    if not user:
+        await callback.answer("Сначала привяжи аккаунт", show_alert=True)
+        return
+
+    tracker_url = user.get("tracker_url") or make_tracker_url(user["riot_id"])
+    await callback.message.answer(
+        f"🔗 <a href='{tracker_url}'>Открыть профиль на Tracker.gg</a>",
+        disable_web_page_preview=True
+    )
+    await callback.answer()
 
 
 # ===== Мой профиль =====
@@ -311,16 +348,16 @@ async def process_bio(message: Message, state: FSMContext):
         return
 
     if len(bio) < 3:
-        await message.answer(
-            "❌ Слишком коротко. Напиши хотя бы пару слов."
-        )
+        await message.answer("❌ Слишком коротко. Напиши хотя бы пару слов.")
         return
 
     await update_bio(message.from_user.id, bio)
     await state.clear()
 
     user = await get_user(message.from_user.id)
-    text = "✅ <b>«Обо мне» сохранено!</b>\n\n" + format_profile_card(user, "👤 Твой профиль")
+    text = "✅ <b>«Обо мне» сохранено!</b>\n\n" + format_profile_card(
+        user, "👤 Твой профиль"
+    )
 
     await message.answer(
         text,
@@ -433,18 +470,24 @@ async def cb_find_team(callback: CallbackQuery):
 
     lines = ["🎮 <b>Команда собрана!</b>\n"]
 
+    # Ты
     lines.append("━━━━━━━━━━━━━━━")
     lines.append("👑 <b>Ты</b>")
     lines.append(f"🎯 <code>{me['riot_id']}</code>")
     lines.append(f"🏆 {me.get('rank', '?')}")
+    tracker_url = me.get("tracker_url") or make_tracker_url(me["riot_id"])
+    lines.append(f"🔗 <a href='{tracker_url}'>Tracker.gg</a>")
     if me.get("bio"):
         lines.append(f"📝 <i>{me['bio']}</i>")
 
+    # Остальные
     for i, c in enumerate(candidates, start=1):
         lines.append("━━━━━━━━━━━━━━━")
         lines.append(f"👤 <b>Игрок {i}</b>")
         lines.append(f"🎯 <code>{c['riot_id']}</code>")
         lines.append(f"🏆 {c.get('rank', '?')}")
+        c_url = c.get("tracker_url") or make_tracker_url(c["riot_id"])
+        lines.append(f"🔗 <a href='{c_url}'>Tracker.gg</a>")
         if c.get("bio"):
             lines.append(f"📝 <i>{c['bio']}</i>")
 

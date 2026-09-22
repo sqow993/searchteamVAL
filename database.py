@@ -21,7 +21,7 @@ async def init_db():
             """)
             await db.commit()
 
-            # Миграция: добавляем bio, если её нет (для старой БД)
+            # Миграция: bio, если нет
             try:
                 await db.execute("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''")
                 await db.commit()
@@ -37,7 +37,7 @@ async def init_db():
 
 async def save_user(telegram_id: int, riot_id: str, tracker_url: str,
                     rank: str = "Unranked"):
-    """Сохраняет или обновляет привязку пользователя"""
+    """Сохраняет или обновляет привязку"""
     print(f"[DB] save_user: tg={telegram_id}, riot={riot_id}, rank={rank}")
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -56,7 +56,7 @@ async def save_user(telegram_id: int, riot_id: str, tracker_url: str,
 
 
 async def update_bio(telegram_id: int, bio: str):
-    """Обновляет описание «Обо мне»"""
+    """Обновляет «Обо мне»"""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
@@ -121,7 +121,7 @@ async def count_users() -> int:
 
 
 def _rank_range(rank: str, tolerance: int = RANK_TOLERANCE):
-    """Возвращает список рангов ±tolerance от указанного"""
+    """Возвращает список рангов ±tolerance"""
     if rank not in RANKS:
         return None
     idx = RANKS.index(rank)

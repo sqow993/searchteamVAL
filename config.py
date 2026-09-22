@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 
-# Загружаем переменные из .env
 load_dotenv()
 
 
@@ -10,7 +9,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
 # ===== Webhook (Render) =====
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")       # https://searchteamval.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "default_secret")
 WEBHOOK_PATH = "/webhook"
 
@@ -23,8 +22,6 @@ DB_PATH = "valorant_bot.db"
 
 
 # ===== Ранги Valorant =====
-# Полный список по порядку (от низшего к высшему).
-# Индекс в списке — это «уровень» ранга, по которому считаем ±
 RANKS = [
     "Iron 1", "Iron 2", "Iron 3",
     "Bronze 1", "Bronze 2", "Bronze 3",
@@ -39,6 +36,4 @@ RANKS = [
 
 
 # ===== Поиск =====
-# Насколько «широко» искать: ±RANK_TOLERANCE дивизионов от твоего ранга.
-# Пример: при значении 2 и ранге "Silver 1" поиск идёт от "Bronze 2" до "Silver 3".
 RANK_TOLERANCE = 2
