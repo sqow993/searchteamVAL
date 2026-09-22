@@ -15,7 +15,7 @@ from aiogram.types import Message, CallbackQuery
 
 from config import (
     BOT_TOKEN, WEBHOOK_URL, WEBHOOK_PATH, WEBHOOK_SECRET,
-    WEBAPP_HOST, WEBAPP_PORT, DB_PATH, RANKS,
+    WEBAPP_HOST, WEBAPP_PORT, RANKS,
 )
 from database import (
     init_db, save_user, get_user, delete_user, update_rank, update_bio,
@@ -520,8 +520,6 @@ async def cb_unlink(callback: CallbackQuery):
 
 async def on_startup():
     await init_db()
-    logger.info(f"[STARTUP] DB_PATH = {os.path.abspath(DB_PATH)}")
-    logger.info(f"[STARTUP] Файл существует: {os.path.exists(DB_PATH)}")
 
     webhook_full_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
     await bot.set_webhook(
