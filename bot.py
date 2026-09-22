@@ -18,12 +18,12 @@ from config import (
     WEBAPP_HOST, WEBAPP_PORT, DB_PATH, RANKS,
 )
 from database import (
-    init_db, save_user, get_user, delete_user, update_rank, update_profile,
+    init_db, save_user, get_user, delete_user, update_rank, update_bio,
     search_teammates, search_team_of_five, count_users, _rank_range
 )
 from keyboards import (
     main_menu, back_to_menu, teammate_actions, ranks_keyboard,
-    profile_menu, profile_skip_keyboard
+    after_link_keyboard, profile_menu
 )
 from webhook import create_app
 
@@ -42,11 +42,8 @@ class LinkStates(StatesGroup):
     waiting_for_rank = State()
 
 
-class ProfileStates(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_age = State()
-    waiting_for_location = State()
-    waiting_for_experience = State()
+class BioStates(StatesGroup):
+    waiting_for_bio = State()
 
 
 # ===== Bot =====
@@ -59,35 +56,22 @@ dp = Dispatcher()
 
 # ===== Форматирование карточки игрока =====
 def format_profile_card(user: dict, title: str = "👤 Найден тиммейт!") -> str:
-    """Формирует карточку игрока с анкетой"""
+    """Карточка игрока: Riot ID, ранг, «Обо мне»"""
     rank = user.get("rank", "Unranked")
     rank_range = _rank_range(rank, tolerance=2)
     range_text = f"{rank_range[0]} — {rank_range[-1]}" if rank_range else rank
 
+    bio = (user.get("bio") or "").strip()
+
     lines = [f"<b>{title}</b>\n"]
     lines.append(f"🎯 Riot ID: <code>{user['riot_id']}</code>")
-    lines.append(f"🏆 Ранг: <b>{rank}</b> (диапазон поиска: {range_text})")
+    lines.append(f"🏆 Ранг: <b>{rank}</b>")
+    lines.append(f"🔍 Ищет в диапазоне: {range_text}")
 
-    # Анкета (только заполненные поля)
-    name = user.get("name", "").strip()
-    age = user.get("age", 0)
-    location = user.get("location", "").strip()
-    experience = user.get("experience", "").strip()
-
-    has_profile = name or age or location or experience
-
-    if has_profile:
-        lines.append("\n📋 <b>О игроке:</b>")
-        if name:
-            lines.append(f"• Имя: <b>{name}</b>")
-        if age and age > 0:
-            lines.append(f"• Возраст: <b>{age}</b>")
-        if location:
-            lines.append(f"• Откуда: <b>{location}</b>")
-        if experience:
-            lines.append(f"• Опыт в Valorant: <b>{experience}</b>")
+    if bio:
+        lines.append(f"\n📝 <b>Обо мне:</b>\n<i>{bio}</i>")
     else:
-        lines.append("\n📋 <i>Анкета не заполнена</i>")
+        lines.append("\n📝 <i>«Обо мне» не заполнено</i>")
 
     return "\n".join(lines)
 
@@ -95,7 +79,8 @@ def format_profile_card(user: dict, title: str = "👤 Найден тиммей
 # ===== Команды =====
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     user = await get_user(message.from_user.id)
 
     if user:
@@ -123,12 +108,11 @@ async def cmd_help(message: Message):
         "/start — главное меню\n"
         "/help — эта справка\n"
         "/stats — сколько игроков в базе\n\n"
-        "🔗 <b>Как привязать аккаунт:</b>\n"
+        "🔗 <b>Привязка:</b>\n"
         "1. Отправь Riot ID в формате <code>Ник#ТЕГ</code>\n"
-        "2. Выбери свой ранг из списка\n"
-        "3. Заполни анкету (по желанию)\n\n"
-        "🎮 <b>Поиск:</b>\n"
-        "Бот ищет игроков в пределах ±2 дивизиона от твоего ранга."
+        "2. Выбери ранг\n"
+        "3. Заполни «Обо мне» (по желанию)\n\n"
+        "🎮 <b>Поиск:</b> бот ищет игроков в пределах ±2 дивизиона от твоего ранга."
     )
     await message.answer(text)
 
@@ -243,24 +227,18 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
     rank_range = _rank_range(rank, tolerance=2)
     range_text = f"{rank_range[0]} — {rank_range[-1]}" if rank_range else rank
 
-    # Предлагаем заполнить анкету
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📝 Заполнить анкету", callback_data="edit_profile")
-    builder.button(text="⏭ Пропустить", callback_data="main_menu")
-    builder.adjust(1, 1)
-
     text = (
         f"✅ <b>Аккаунт привязан!</b>\n\n"
         f"🎯 Riot ID: <code>{riot_id}</code>\n"
         f"🏆 Ранг: <b>{rank}</b>\n"
         f"🔍 Диапазон поиска: <b>{range_text}</b>\n\n"
-        f"Хочешь заполнить анкету о себе?\n"
-        f"Это поможет другим игрокам узнать тебя лучше."
+        f"Хочешь рассказать о себе?\n"
+        f"Например: <i>«Меня зовут Егор, играю с 2024 года, "
+        f"активно начал в этом году, хочу найти тиммейта чтобы закеррил катку»</i>"
     )
 
     await state.clear()
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.message.edit_text(text, reply_markup=after_link_keyboard())
     await callback.answer("Ранг сохранён!")
 
 
@@ -279,38 +257,8 @@ async def cb_my_profile(callback: CallbackQuery):
         await callback.answer()
         return
 
-    encoded = urllib.parse.quote(user["riot_id"], safe="")
-    tracker_url = f"https://tracker.gg/valorant/profile/riot/{encoded}/overview"
-
-    rank = user.get("rank", "Unranked")
-    rank_range = _rank_range(rank, tolerance=2)
-    range_text = f"{rank_range[0]} — {rank_range[-1]}" if rank_range else rank
-
-    text = f"👤 <b>Твой профиль</b>\n\n"
-    text += f"🎯 Riot ID: <code>{user['riot_id']}</code>\n"
-    text += f"🏆 Ранг: <b>{rank}</b>\n"
-    text += f"🔍 Диапазон поиска: <b>{range_text}</b>\n"
-
-    # Анкета
-    name = user.get("name", "").strip()
-    age = user.get("age", 0)
-    location = user.get("location", "").strip()
-    experience = user.get("experience", "").strip()
-
-    text += "\n📋 <b>Анкета:</b>\n"
-    if name:
-        text += f"• Имя: <b>{name}</b>\n"
-    if age and age > 0:
-        text += f"• Возраст: <b>{age}</b>\n"
-    if location:
-        text += f"• Откуда: <b>{location}</b>\n"
-    if experience:
-        text += f"• Опыт: <b>{experience}</b>\n"
-
-    if not any([name, age, location, experience]):
-        text += "<i>не заполнена</i>\n"
-
-    text += f"\n🔗 <a href='{tracker_url}'>Открыть на Tracker.gg</a>"
+    text = format_profile_card(user, title="👤 Твой профиль")
+    text += "\n\n💡 Чтобы изменить данные — используй кнопки ниже."
 
     await callback.message.edit_text(
         text,
@@ -320,169 +268,65 @@ async def cb_my_profile(callback: CallbackQuery):
     await callback.answer()
 
 
-# ===== Редактирование анкеты: шаг 1 — Имя =====
+# ===== Заполнение «Обо мне» =====
 
-@dp.callback_query(F.data == "edit_profile")
-async def cb_edit_profile(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "edit_bio")
+async def cb_edit_bio(callback: CallbackQuery, state: FSMContext):
     user = await get_user(callback.from_user.id)
     if not user:
         await callback.answer("Сначала привяжи аккаунт", show_alert=True)
         return
 
-    await state.set_state(ProfileStates.waiting_for_name)
+    current_bio = (user.get("bio") or "").strip()
+    current_text = f"\n\nСейчас: <i>{current_bio}</i>" if current_bio else ""
+
+    await state.set_state(BioStates.waiting_for_bio)
 
     text = (
-        "📝 <b>Заполнение анкеты</b>\n\n"
-        "Шаг 1/4: <b>Как тебя зовут?</b>\n\n"
-        "Напиши своё имя или ник (например, <i>Александр</i> или <i>Sasha</i>).\n\n"
-        "Или нажми «Пропустить»."
+        "📝 <b>Обо мне</b>\n\n"
+        "Напиши пару слов о себе. Что угодно:\n"
+        "• Как зовут\n"
+        "• Сколько играешь\n"
+        "• Кого ищешь в тиммейты\n"
+        "• Свои цели в игре\n\n"
+        f"<b>Пример:</b>\n"
+        f"<i>«Меня зовут Егор, играю с 2024 года, активно начал в этом году, "
+        f"хочу найти тиммейта чтобы закеррил катку :)»</i>\n\n"
+        f"Максимум 300 символов.{current_text}"
     )
 
-    await callback.message.edit_text(text, reply_markup=profile_skip_keyboard())
+    await callback.message.edit_text(text, reply_markup=back_to_menu())
     await callback.answer()
 
 
-@dp.message(ProfileStates.waiting_for_name)
-async def profile_name(message: Message, state: FSMContext):
-    name = message.text.strip()[:50]
-    await state.update_data(name=name)
-    await state.set_state(ProfileStates.waiting_for_age)
+@dp.message(BioStates.waiting_for_bio)
+async def process_bio(message: Message, state: FSMContext):
+    bio = message.text.strip()
 
-    await message.answer(
-        f"✅ Имя: <b>{name}</b>\n\n"
-        "Шаг 2/4: <b>Сколько тебе лет?</b>\n\n"
-        "Напиши число (например, <i>18</i>).",
-        reply_markup=profile_skip_keyboard()
-    )
-
-
-# ===== Шаг 2 — Возраст =====
-
-@dp.message(ProfileStates.waiting_for_age)
-async def profile_age(message: Message, state: FSMContext):
-    text = message.text.strip()
-
-    if not text.isdigit():
+    if len(bio) > 300:
         await message.answer(
-            "❌ Возраст должен быть числом. Попробуй ещё раз:",
-            reply_markup=profile_skip_keyboard()
+            f"❌ Слишком длинно ({len(bio)} символов). Максимум 300.\n"
+            "Сократи и отправь ещё раз."
         )
         return
 
-    age = int(text)
-    if age < 5 or age > 100:
+    if len(bio) < 3:
         await message.answer(
-            "❌ Возраст должен быть от 5 до 100. Попробуй ещё раз:",
-            reply_markup=profile_skip_keyboard()
+            "❌ Слишком коротко. Напиши хотя бы пару слов."
         )
         return
 
-    await state.update_data(age=age)
-    await state.set_state(ProfileStates.waiting_for_location)
-
-    await message.answer(
-        f"✅ Возраст: <b>{age}</b>\n\n"
-        "Шаг 3/4: <b>Откуда ты?</b>\n\n"
-        "Напиши город или страну (например, <i>Москва</i> или <i>Казахстан</i>).",
-        reply_markup=profile_skip_keyboard()
-    )
-
-
-# ===== Шаг 3 — Локация =====
-
-@dp.message(ProfileStates.waiting_for_location)
-async def profile_location(message: Message, state: FSMContext):
-    location = message.text.strip()[:50]
-    await state.update_data(location=location)
-    await state.set_state(ProfileStates.waiting_for_experience)
-
-    await message.answer(
-        f"✅ Откуда: <b>{location}</b>\n\n"
-        "Шаг 4/4: <b>Сколько играешь в Valorant?</b>\n\n"
-        "Напиши свой опыт (например, <i>2 года</i>, <i>с беты</i>, <i>3 месяца</i>).",
-        reply_markup=profile_skip_keyboard()
-    )
-
-
-# ===== Шаг 4 — Опыт =====
-
-@dp.message(ProfileStates.waiting_for_experience)
-async def profile_experience(message: Message, state: FSMContext):
-    experience = message.text.strip()[:50]
-    await state.update_data(experience=experience)
-
-    # Сохраняем всё
-    data = await state.get_data()
-    await update_profile(
-        message.from_user.id,
-        data.get("name", ""),
-        data.get("age", 0),
-        data.get("location", ""),
-        experience
-    )
-
+    await update_bio(message.from_user.id, bio)
     await state.clear()
 
-    text = (
-        "✅ <b>Анкета сохранена!</b>\n\n"
-        f"📋 <b>Твои данные:</b>\n"
-        f"• Имя: <b>{data.get('name', '—')}</b>\n"
-        f"• Возраст: <b>{data.get('age', '—')}</b>\n"
-        f"• Откуда: <b>{data.get('location', '—')}</b>\n"
-        f"• Опыт: <b>{experience}</b>\n\n"
-        f"Теперь другие игроки увидят это при поиске."
+    user = await get_user(message.from_user.id)
+    text = "✅ <b>«Обо мне» сохранено!</b>\n\n" + format_profile_card(user, "👤 Твой профиль")
+
+    await message.answer(
+        text,
+        reply_markup=profile_menu(),
+        disable_web_page_preview=True
     )
-
-    await message.answer(text, reply_markup=main_menu())
-
-
-# ===== Пропуск поля =====
-
-@dp.callback_query(F.data == "skip_field")
-async def cb_skip_field(callback: CallbackQuery, state: FSMContext):
-    current = await state.get_state()
-
-    if current == ProfileStates.waiting_for_name:
-        await state.set_state(ProfileStates.waiting_for_age)
-        await callback.message.edit_text(
-            "⏭ Имя пропущено.\n\n"
-            "Шаг 2/4: <b>Сколько тебе лет?</b>\n"
-            "Напиши число или пропусти.",
-            reply_markup=profile_skip_keyboard()
-        )
-    elif current == ProfileStates.waiting_for_age:
-        await state.set_state(ProfileStates.waiting_for_location)
-        await callback.message.edit_text(
-            "⏭ Возраст пропущен.\n\n"
-            "Шаг 3/4: <b>Откуда ты?</b>\n"
-            "Напиши город/страну или пропусти.",
-            reply_markup=profile_skip_keyboard()
-        )
-    elif current == ProfileStates.waiting_for_location:
-        await state.set_state(ProfileStates.waiting_for_experience)
-        await callback.message.edit_text(
-            "⏭ Локация пропущена.\n\n"
-            "Шаг 4/4: <b>Сколько играешь в Valorant?</b>\n"
-            "Напиши опыт или пропусти.",
-            reply_markup=profile_skip_keyboard()
-        )
-    elif current == ProfileStates.waiting_for_experience:
-        # Финальный шаг — сохраняем что есть
-        data = await state.get_data()
-        await update_profile(
-            callback.from_user.id,
-            data.get("name", ""),
-            data.get("age", 0),
-            data.get("location", ""),
-            ""
-        )
-        await state.clear()
-        await callback.message.edit_text(
-            "✅ Анкета сохранена!",
-            reply_markup=main_menu()
-        )
-
-    await callback.answer()
 
 
 # ===== Изменение ранга =====
@@ -587,27 +431,22 @@ async def cb_find_team(callback: CallbackQuery):
         await callback.answer()
         return
 
-    # Формируем карточки для каждого
     lines = ["🎮 <b>Команда собрана!</b>\n"]
 
-    # Ты
     lines.append("━━━━━━━━━━━━━━━")
     lines.append("👑 <b>Ты</b>")
     lines.append(f"🎯 <code>{me['riot_id']}</code>")
     lines.append(f"🏆 {me.get('rank', '?')}")
-    if me.get("name"):
-        lines.append(f"• {me['name']}, {me.get('age', '?')} лет, {me.get('location', '?')}")
+    if me.get("bio"):
+        lines.append(f"📝 <i>{me['bio']}</i>")
 
-    # Остальные
     for i, c in enumerate(candidates, start=1):
         lines.append("━━━━━━━━━━━━━━━")
         lines.append(f"👤 <b>Игрок {i}</b>")
         lines.append(f"🎯 <code>{c['riot_id']}</code>")
         lines.append(f"🏆 {c.get('rank', '?')}")
-        if c.get("name"):
-            lines.append(f"• {c['name']}, {c.get('age', '?')} лет, {c.get('location', '?')}")
-        if c.get("experience"):
-            lines.append(f"• Опыт: {c['experience']}")
+        if c.get("bio"):
+            lines.append(f"📝 <i>{c['bio']}</i>")
 
     text = "\n".join(lines)
     text += "\n\n💬 Добавляйтесь в друзья и играйте!"

@@ -29,22 +29,22 @@ def ranks_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def profile_menu() -> InlineKeyboardMarkup:
-    """Меню в профиле"""
+def after_link_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки после привязки"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Редактировать анкету", callback_data="edit_profile")
-    builder.button(text="🏆 Изменить ранг", callback_data="change_rank")
-    builder.button(text="◀️ В меню", callback_data="main_menu")
-    builder.adjust(1, 1, 1)
+    builder.button(text="📝 Заполнить «Обо мне»", callback_data="edit_bio")
+    builder.button(text="⏭ Пропустить", callback_data="main_menu")
+    builder.adjust(1, 1)
     return builder.as_markup()
 
 
-def profile_skip_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка «Пропустить» при заполнении анкеты"""
+def profile_menu() -> InlineKeyboardMarkup:
+    """Меню в профиле"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="⏭ Пропустить", callback_data="skip_field")
-    builder.button(text="❌ Отмена", callback_data="main_menu")
-    builder.adjust(2)
+    builder.button(text="✏️ Изменить «Обо мне»", callback_data="edit_bio")
+    builder.button(text="🏆 Изменить ранг", callback_data="change_rank")
+    builder.button(text="◀️ В меню", callback_data="main_menu")
+    builder.adjust(1, 1, 1)
     return builder.as_markup()
 
 
