@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 
 # Сюда вставь URL твоего FlareSolverr на Render
 # Например: "https://flaresolverr-xxxx.onrender.com"
-FLARESOLVERR_URL = "https://flaresolverr-xxxx.onrender.com"
+FLARESOLVERR_URL = "https://flaresolverr-9rkr.onrender.com"
 
 
 async def fetch_html_via_flaresolverr(tracker_url: str) -> str | None:
