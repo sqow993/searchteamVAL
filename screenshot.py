@@ -1,62 +1,70 @@
 """
-Скриншот профиля Tracker.gg через Playwright.
-Ждём обхода Cloudflare перед скриншотом.
+Скриншот профиля Tracker.gg через FlareSolverr + Playwright.
 """
 
 import io
-import asyncio
+import aiohttp
 from PIL import Image
 from playwright.async_api import async_playwright
 
 
-# Признаки Cloudflare-заглушки
-CLOUDFLARE_MARKERS = [
-    "Performing security verification",
-    "Just a moment",
-    "Checking your browser",
-    "Verify you are human",
-    "cloudflare",
-]
-
-# Признаки того, что реальный профиль загрузился
-PROFILE_MARKERS = [
-    "Rating",
-    "Damage/Round",
-    "K/D Ratio",
-    "Tracker Score",
-    "Win %",
-]
+# Сюда вставь URL твоего FlareSolverr на Render
+# Например: "https://flaresolverr-xxxx.onrender.com"
+FLARESOLVERR_URL = "https://flaresolverr-xxxx.onrender.com"
 
 
-async def _is_cloudflare_page(page) -> bool:
-    """Проверяет, показывает ли страница Cloudflare-заглушку"""
+async def fetch_html_via_flaresolverr(tracker_url: str) -> str | None:
+    """
+    Отправляет запрос в FlareSolverr.
+    FlareSolverr решает Cloudflare и возвращает готовый HTML.
+    """
+    payload = {
+        "cmd": "request.get",
+        "url": tracker_url,
+        "maxTimeout": 90000  # 90 секунд на решение challenge
+    }
+
     try:
-        content = await page.content()
-        content_lower = content.lower()
-        return any(marker.lower() in content_lower for marker in CLOUDFLARE_MARKERS)
-    except Exception:
-        return False
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{FLARESOLVERR_URL}/v1",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120)
+            ) as resp:
+                if resp.status != 200:
+                    print(f"[FLARESOLVERR] HTTP {resp.status}")
+                    return None
 
+                data = await resp.json()
+                solution = data.get("solution", {})
+                html = solution.get("response")
 
-async def _is_profile_loaded(page) -> bool:
-    """Проверяет, загрузился ли реальный профиль"""
-    try:
-        content = await page.content()
-        # Проверяем, что нет Cloudflare
-        if await _is_cloudflare_page(page):
-            return False
-        # Ищем маркеры профиля
-        return any(marker in content for marker in PROFILE_MARKERS)
-    except Exception:
-        return False
+                if html:
+                    print(f"[FLARESOLVERR] HTML получен, размер: {len(html)}")
+                    return html
+                else:
+                    print(f"[FLARESOLVERR] Пустой ответ: {data}")
+                    return None
+
+    except Exception as e:
+        print(f"[FLARESOLVERR] Ошибка: {e}")
+        return None
 
 
 async def take_stats_screenshot(tracker_url: str) -> io.BytesIO | None:
     """
-    Открывает Tracker.gg и возвращает скриншот верхней части страницы.
-    Ждёт обхода Cloudflare и загрузки реального контента.
+    Получает HTML через FlareSolverr и рендерит его в Playwright.
     """
 
+    # Шаг 1: Получаем HTML через FlareSolverr
+    print(f"[SCREENSHOT] Запрос в FlareSolverr для {tracker_url}")
+    html = await fetch_html_via_flaresolverr(tracker_url)
+
+    if not html:
+        print("[SCREENSHOT] FlareSolverr не смог получить HTML")
+        return None
+
+    # Шаг 2: Рендерим HTML в Playwright и делаем скриншот
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -64,83 +72,19 @@ async def take_stats_screenshot(tracker_url: str) -> io.BytesIO | None:
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
             ]
         )
 
-        context = await browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-            timezone_id="Europe/Moscow",
-        )
-
-        # Скрываем признаки автоматизации
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en', 'ru']
-            });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
-            });
-            window.chrome = { runtime: {} };
-        """)
-
-        page = await context.new_page()
+        page = await browser.new_page(viewport={"width": 1440, "height": 900})
 
         try:
-            print(f"[SCREENSHOT] Открываю: {tracker_url}")
-            await page.goto(
-                tracker_url,
-                wait_until="domcontentloaded",
-                timeout=60000
-            )
+            # Загружаем готовый HTML от FlareSolverr
+            await page.set_content(html, wait_until="networkidle")
 
-            # Ждём обхода Cloudflare (до 60 секунд)
-            max_wait = 60
-            waited = 0
-            step = 3
+            # Даём время на отрисовку графиков
+            await page.wait_for_timeout(5000)
 
-            while waited < max_wait:
-                if await _is_profile_loaded(page):
-                    print(f"[SCREENSHOT] Профиль загрузился за {waited} сек")
-                    break
-
-                if await _is_cloudflare_page(page):
-                    print(f"[SCREENSHOT] Cloudflare проверяет... ({waited}с)")
-                else:
-                    print(f"[SCREENSHOT] Страница грузится... ({waited}с)")
-
-                await page.wait_for_timeout(step * 1000)
-                waited += step
-            else:
-                print("[SCREENSHOT] Таймаут: Cloudflare не пропустил")
-                # Всё равно пробуем сделать скриншот
-                # (иногда Cloudflare пропускает чуть позже)
-
-            # Даём время на финальную отрисовку графиков
-            await page.wait_for_timeout(4000)
-
-            # Проверяем, не Cloudflare ли сейчас
-            if await _is_cloudflare_page(page):
-                print("[SCREENSHOT] Всё ещё Cloudflare — прерываю")
-                await browser.close()
-                return None
-
-            # Прокручиваем страницу вниз и обратно (иногда помогает прогрузить)
-            await page.evaluate("window.scrollTo(0, 500)")
-            await page.wait_for_timeout(1000)
-            await page.evaluate("window.scrollTo(0, 0)")
-            await page.wait_for_timeout(1000)
-
+            # Скриншот
             screenshot_bytes = await page.screenshot(full_page=True)
             print("[SCREENSHOT] Скриншот сделан")
 
