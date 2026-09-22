@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+valorant_bot.db
+*.png
+.git/
+.vscode/
+.idea/
