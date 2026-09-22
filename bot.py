@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-import os
 import urllib.parse
 
 from aiohttp import web
@@ -36,20 +35,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ===== Утилита: генерация ссылки на Tracker.gg =====
-def make_tracker_url(riot_id: str) -> str:
-    """
-    Генерирует ссылку на профиль Tracker.gg из Riot ID.
-    
-    Пример:
-    "из грязи в князи#GAVNO" 
-    -> "https://tracker.gg/valorant/profile/riot/%D0%B8%D0%B7%20...%23GAVNO/overview"
-    """
-    encoded = urllib.parse.quote(riot_id, safe="")
-    return f"https://tracker.gg/valorant/profile/riot/{encoded}/overview"
-
-
-# ===== Состояния FSM =====
 class LinkStates(StatesGroup):
     waiting_for_riot_id = State()
     waiting_for_rank = State()
@@ -59,7 +44,6 @@ class BioStates(StatesGroup):
     waiting_for_bio = State()
 
 
-# ===== Bot =====
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
@@ -67,9 +51,12 @@ bot = Bot(
 dp = Dispatcher()
 
 
-# ===== Форматирование карточки игрока =====
+def make_tracker_url(riot_id: str) -> str:
+    encoded = urllib.parse.quote(riot_id, safe="")
+    return f"https://tracker.gg/valorant/profile/riot/{encoded}/overview"
+
+
 def format_profile_card(user: dict, title: str = "👤 Найден тиммейт!") -> str:
-    """Карточка: Riot ID, ранг, ссылка на Tracker, «Обо мне»"""
     rank = user.get("rank", "Unranked")
     rank_range = _rank_range(rank, tolerance=2)
     range_text = f"{rank_range[0]} — {rank_range[-1]}" if rank_range else rank
@@ -90,8 +77,6 @@ def format_profile_card(user: dict, title: str = "👤 Найден тиммей
 
     return "\n".join(lines)
 
-
-# ===== Команды =====
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -123,10 +108,6 @@ async def cmd_help(message: Message):
         "/start — главное меню\n"
         "/help — эта справка\n"
         "/stats — сколько игроков в базе\n\n"
-        "🔗 <b>Привязка:</b>\n"
-        "1. Отправь Riot ID в формате <code>Ник#ТЕГ</code>\n"
-        "2. Выбери ранг\n"
-        "3. Заполни «Обо мне» (по желанию)\n\n"
         "🎮 <b>Поиск:</b> бот ищет игроков ±2 дивизиона от твоего ранга."
     )
     await message.answer(text)
@@ -137,8 +118,6 @@ async def cmd_stats(message: Message):
     total = await count_users()
     await message.answer(f"👥 Игроков в базе: <b>{total}</b>")
 
-
-# ===== Главное меню =====
 
 @dp.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
@@ -164,8 +143,6 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ===== Привязка: шаг 1 — Riot ID =====
-
 @dp.callback_query(F.data == "link_tracker")
 async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
     await state.set_state(LinkStates.waiting_for_riot_id)
@@ -176,8 +153,7 @@ async def cb_link_tracker(callback: CallbackQuery, state: FSMContext):
         "<code>Ник#ТЕГ</code>\n\n"
         "<b>Примеры:</b>\n"
         "<code>Player#EUW</code>\n"
-        "<code>из грязи в князи#GAVNO</code>\n\n"
-        "💡 Бот сам создаст ссылку на твой профиль Tracker.gg."
+        "<code>из грязи в князи#GAVNO</code>"
     )
 
     await callback.message.edit_text(text, reply_markup=back_to_menu())
@@ -213,8 +189,6 @@ async def process_riot_id(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=ranks_keyboard())
 
 
-# ===== Привязка: шаг 2 — Ранг =====
-
 @dp.callback_query(F.data.startswith("set_rank:"), LinkStates.waiting_for_rank)
 async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
     rank = callback.data.split(":", 1)[1]
@@ -235,7 +209,6 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    # Генерируем ссылку на Tracker.gg и сохраняем
     tracker_url = make_tracker_url(riot_id)
     await save_user(callback.from_user.id, riot_id, tracker_url, rank)
 
@@ -248,9 +221,7 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
         f"🏆 Ранг: <b>{rank}</b>\n"
         f"🔍 Диапазон поиска: <b>{range_text}</b>\n"
         f"🔗 <a href='{tracker_url}'>Твой профиль на Tracker.gg</a>\n\n"
-        f"Хочешь рассказать о себе?\n"
-        f"Например: <i>«Меня зовут Егор, играю с 2024 года, "
-        f"активно начал в этом году, хочу найти тиммейта чтобы закеррил катку»</i>"
+        f"Хочешь рассказать о себе?"
     )
 
     await state.clear()
@@ -261,25 +232,6 @@ async def cb_set_rank(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer("Ранг сохранён!")
 
-
-# ===== Открыть Tracker.gg =====
-
-@dp.callback_query(F.data == "open_tracker")
-async def cb_open_tracker(callback: CallbackQuery):
-    user = await get_user(callback.from_user.id)
-    if not user:
-        await callback.answer("Сначала привяжи аккаунт", show_alert=True)
-        return
-
-    tracker_url = user.get("tracker_url") or make_tracker_url(user["riot_id"])
-    await callback.message.answer(
-        f"🔗 <a href='{tracker_url}'>Открыть профиль на Tracker.gg</a>",
-        disable_web_page_preview=True
-    )
-    await callback.answer()
-
-
-# ===== Мой профиль =====
 
 @dp.callback_query(F.data == "my_profile")
 async def cb_my_profile(callback: CallbackQuery):
@@ -305,8 +257,6 @@ async def cb_my_profile(callback: CallbackQuery):
     await callback.answer()
 
 
-# ===== Заполнение «Обо мне» =====
-
 @dp.callback_query(F.data == "edit_bio")
 async def cb_edit_bio(callback: CallbackQuery, state: FSMContext):
     user = await get_user(callback.from_user.id)
@@ -321,13 +271,12 @@ async def cb_edit_bio(callback: CallbackQuery, state: FSMContext):
 
     text = (
         "📝 <b>Обо мне</b>\n\n"
-        "Напиши пару слов о себе. Что угодно:\n"
+        "Напиши пару слов о себе:\n"
         "• Как зовут\n"
         "• Сколько играешь\n"
-        "• Кого ищешь в тиммейты\n"
-        "• Свои цели в игре\n\n"
+        "• Кого ищешь в тиммейты\n\n"
         f"<b>Пример:</b>\n"
-        f"<i>«Меня зовут Егор, играю с 2024 года, активно начал в этом году, "
+        f"<i>«Меня зовут Егор, играю с 2024 года, "
         f"хочу найти тиммейта чтобы закеррил катку :)»</i>\n\n"
         f"Максимум 300 символов.{current_text}"
     )
@@ -342,13 +291,12 @@ async def process_bio(message: Message, state: FSMContext):
 
     if len(bio) > 300:
         await message.answer(
-            f"❌ Слишком длинно ({len(bio)} символов). Максимум 300.\n"
-            "Сократи и отправь ещё раз."
+            f"❌ Слишком длинно ({len(bio)} символов). Максимум 300."
         )
         return
 
     if len(bio) < 3:
-        await message.answer("❌ Слишком коротко. Напиши хотя бы пару слов.")
+        await message.answer("❌ Слишком коротко.")
         return
 
     await update_bio(message.from_user.id, bio)
@@ -365,8 +313,6 @@ async def process_bio(message: Message, state: FSMContext):
         disable_web_page_preview=True
     )
 
-
-# ===== Изменение ранга =====
 
 @dp.callback_query(F.data == "change_rank")
 async def cb_change_rank(callback: CallbackQuery, state: FSMContext):
@@ -385,8 +331,6 @@ async def cb_change_rank(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ===== Поиск 1 тиммейта =====
-
 @dp.callback_query(F.data == "find_teammate")
 async def cb_find_teammate(callback: CallbackQuery):
     me = await get_user(callback.from_user.id)
@@ -403,7 +347,7 @@ async def cb_find_teammate(callback: CallbackQuery):
 
     if my_rank not in RANKS:
         await callback.message.edit_text(
-            "⚠️ У тебя не выбран ранг. Укажи его в профиле.",
+            "⚠️ У тебя не выбран ранг.",
             reply_markup=back_to_menu()
         )
         await callback.answer()
@@ -432,8 +376,6 @@ async def cb_find_teammate(callback: CallbackQuery):
     )
     await callback.answer()
 
-
-# ===== Поиск команды из 5 =====
 
 @dp.callback_query(F.data == "find_team")
 async def cb_find_team(callback: CallbackQuery):
@@ -470,7 +412,6 @@ async def cb_find_team(callback: CallbackQuery):
 
     lines = ["🎮 <b>Команда собрана!</b>\n"]
 
-    # Ты
     lines.append("━━━━━━━━━━━━━━━")
     lines.append("👑 <b>Ты</b>")
     lines.append(f"🎯 <code>{me['riot_id']}</code>")
@@ -480,7 +421,6 @@ async def cb_find_team(callback: CallbackQuery):
     if me.get("bio"):
         lines.append(f"📝 <i>{me['bio']}</i>")
 
-    # Остальные
     for i, c in enumerate(candidates, start=1):
         lines.append("━━━━━━━━━━━━━━━")
         lines.append(f"👤 <b>Игрок {i}</b>")
@@ -502,8 +442,6 @@ async def cb_find_team(callback: CallbackQuery):
     await callback.answer()
 
 
-# ===== Отвязка =====
-
 @dp.callback_query(F.data == "unlink")
 async def cb_unlink(callback: CallbackQuery):
     await delete_user(callback.from_user.id)
@@ -515,8 +453,6 @@ async def cb_unlink(callback: CallbackQuery):
     )
     await callback.answer()
 
-
-# ===== Запуск =====
 
 async def on_startup():
     await init_db()

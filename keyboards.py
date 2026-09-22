@@ -30,7 +30,6 @@ def ranks_keyboard() -> InlineKeyboardMarkup:
 
 
 def after_link_keyboard() -> InlineKeyboardMarkup:
-    """Кнопки после привязки"""
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Заполнить «Обо мне»", callback_data="edit_bio")
     builder.button(text="⏭ Пропустить", callback_data="main_menu")
@@ -39,7 +38,6 @@ def after_link_keyboard() -> InlineKeyboardMarkup:
 
 
 def profile_menu() -> InlineKeyboardMarkup:
-    """Меню в профиле"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Изменить «Обо мне»", callback_data="edit_bio")
     builder.button(text="🏆 Изменить ранг", callback_data="change_rank")

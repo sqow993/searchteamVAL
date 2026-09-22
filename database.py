@@ -5,12 +5,20 @@ _pool = None
 
 
 async def init_db():
+    """Создаёт пул соединений и таблицу"""
     global _pool
-    _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    print(f"[DB] Подключение к Supabase...")
+
+    _pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=5,
+        statement_cache_size=0,  # для Session pooler
+    )
 
     async with _pool.acquire() as conn:
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE IF NOT EXISTS public.users (
                 telegram_id BIGINT PRIMARY KEY,
                 riot_id TEXT NOT NULL,
                 tracker_url TEXT NOT NULL,
@@ -19,45 +27,63 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+    print("[DB] Таблица готова")
 
 
 async def save_user(telegram_id: int, riot_id: str, tracker_url: str,
                     rank: str = "Unranked"):
+    print(f"[DB] save_user: tg={telegram_id}, riot={riot_id}, rank={rank}")
     async with _pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO users (telegram_id, riot_id, tracker_url, rank)
+            INSERT INTO public.users (telegram_id, riot_id, tracker_url, rank)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (telegram_id) DO UPDATE SET
                 riot_id = EXCLUDED.riot_id,
                 tracker_url = EXCLUDED.tracker_url,
                 rank = EXCLUDED.rank
         """, telegram_id, riot_id, tracker_url, rank)
+    print("[DB] save_user OK")
 
 
 async def update_bio(telegram_id: int, bio: str):
     async with _pool.acquire() as conn:
         await conn.execute(
-            "UPDATE users SET bio = $1 WHERE telegram_id = $2",
+            "UPDATE public.users SET bio = $1 WHERE telegram_id = $2",
             bio, telegram_id
         )
+    print("[DB] update_bio OK")
+
+
+async def update_rank(telegram_id: int, rank: str):
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE public.users SET rank = $1 WHERE telegram_id = $2",
+            rank, telegram_id
+        )
+    print(f"[DB] update_rank OK: {rank}")
 
 
 async def get_user(telegram_id: int):
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM users WHERE telegram_id = $1", telegram_id
+            "SELECT * FROM public.users WHERE telegram_id = $1",
+            telegram_id
         )
         return dict(row) if row else None
 
 
 async def delete_user(telegram_id: int):
     async with _pool.acquire() as conn:
-        await conn.execute("DELETE FROM users WHERE telegram_id = $1", telegram_id)
+        await conn.execute(
+            "DELETE FROM public.users WHERE telegram_id = $1",
+            telegram_id
+        )
+    print("[DB] delete_user OK")
 
 
 async def count_users() -> int:
     async with _pool.acquire() as conn:
-        return await conn.fetchval("SELECT COUNT(*) FROM users")
+        return await conn.fetchval("SELECT COUNT(*) FROM public.users")
 
 
 def _rank_range(rank: str, tolerance: int = RANK_TOLERANCE):
@@ -75,7 +101,7 @@ async def search_teammates(exclude_id: int, rank: str = None, limit: int = 5):
     async with _pool.acquire() as conn:
         if rank_list:
             rows = await conn.fetch("""
-                SELECT * FROM users 
+                SELECT * FROM public.users 
                 WHERE telegram_id != $1 
                   AND rank = ANY($2::text[])
                 ORDER BY RANDOM() 
@@ -83,7 +109,7 @@ async def search_teammates(exclude_id: int, rank: str = None, limit: int = 5):
             """, exclude_id, rank_list, limit)
         else:
             rows = await conn.fetch("""
-                SELECT * FROM users 
+                SELECT * FROM public.users 
                 WHERE telegram_id != $1 
                 ORDER BY RANDOM() 
                 LIMIT $2
@@ -98,7 +124,7 @@ async def search_team_of_five(exclude_id: int, rank: str = None):
     async with _pool.acquire() as conn:
         if rank_list:
             rows = await conn.fetch("""
-                SELECT * FROM users 
+                SELECT * FROM public.users 
                 WHERE telegram_id != $1 
                   AND rank = ANY($2::text[])
                 ORDER BY RANDOM() 
@@ -106,7 +132,7 @@ async def search_team_of_five(exclude_id: int, rank: str = None):
             """, exclude_id, rank_list)
         else:
             rows = await conn.fetch("""
-                SELECT * FROM users 
+                SELECT * FROM public.users 
                 WHERE telegram_id != $1 
                 ORDER BY RANDOM() 
                 LIMIT 4

@@ -9,7 +9,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 
 # ===== Webhook (Render) =====
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")       # https://searchteamval.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "default_secret")
 WEBHOOK_PATH = "/webhook"
 
@@ -18,14 +18,10 @@ WEBAPP_PORT = int(os.getenv("PORT", 8080))
 
 
 # ===== База данных (Supabase PostgreSQL) =====
-# Строка подключения берётся из переменной окружения DATABASE_URL
-# Формат: postgresql://postgres.xxxxx:ПАРОЛЬ@aws-0-xxx.pooler.supabase.com:5432/postgres
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 # ===== Ранги Valorant =====
-# Полный список по порядку (от низшего к высшему).
-# Индекс в списке — это «уровень» ранга, по которому считаем ±
 RANKS = [
     "Iron 1", "Iron 2", "Iron 3",
     "Bronze 1", "Bronze 2", "Bronze 3",
@@ -40,6 +36,4 @@ RANKS = [
 
 
 # ===== Поиск =====
-# Насколько «широко» искать: ±RANK_TOLERANCE дивизионов от твоего ранга.
-# Пример: при значении 2 и ранге "Silver 1" поиск идёт от "Bronze 2" до "Silver 3".
 RANK_TOLERANCE = 2
